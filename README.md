@@ -67,7 +67,7 @@ The mod runs in Windhawk's UI access process, so it also works while an elevated
 1. **Detect the tap.** A low-level keyboard hook keeps its own key-down table. A new key pressed while Win is down, or a mouse click, makes a chord. Repeats of a key held from before the Win press don't count, so a held push-to-talk key keeps the tap. Left and right Win count alike.
 2. **Mask Start.** On a tap, the hook sends the unassigned key VK `0xE8` before Windows sees the Win release, so the Start menu stays shut.
 3. **Summon.** The mod calls `AllowSetForegroundWindow` on the Command Palette process, then signals Command Palette's show event. With a page hotkey set, it sends that hotkey instead. With `action` set to `command`, it runs the command on its own thread. A tap while the palette is in front sends the palette hotkey, which closes it.
-4. **Buffer and replay.** Keys typed after the tap are held and replayed into the palette on its first focus event, or 50 ms after it takes the foreground. After a 400 ms deadline, the held keys replay to whichever window has focus. An Enter and the keys after it wait a further 150 ms, so the results update before Enter lands.
+4. **Buffer and replay.** Keys typed after the tap are held and replayed into the palette on its first focus event, or 50 ms after it takes the foreground. In the palette, an Enter and the keys after it wait a further 150 ms, so the results update before Enter lands. After a 400 ms deadline, every held key, Enter included, replays to whichever window has focus.
 
 ## Limits
 

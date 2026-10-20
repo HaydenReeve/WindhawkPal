@@ -587,11 +587,13 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
                 SendHotkey(g_settings.paletteHotkey);
                 break;
             case WM_TIMER:
+                // Past the deadline, the text and its Enter go to the same
+                // window together.
                 if (msg.wParam == g_deadlineTimer ||
-                    msg.wParam == g_settleTimer) {
-                    Flush();
-                } else if (msg.wParam == g_enterTimer) {
+                    msg.wParam == g_enterTimer) {
                     FlushAll();
+                } else if (msg.wParam == g_settleTimer) {
+                    Flush();
                 }
                 break;
             default:
