@@ -77,6 +77,7 @@ The mod does nothing while Sticky Keys is on.
 // ==/WindhawkModSettings==
 
 #include <windhawk_tool_mod.h>
+#include <windhawk_utils.h>
 
 #include <shellapi.h>
 #include <tlhelp32.h>
@@ -84,10 +85,11 @@ The mod does nothing while Sticky Keys is on.
 #include <string>
 #include <vector>
 
-// Marks the mod's own injected input, which its hooks ignore.
+// Tags the mod's injected input so its hooks skip it.
 constexpr ULONG_PTR kMarker = 0x57484B54;
 
-// An unassigned virtual key, injected to keep Start shut.
+// An unassigned virtual key, injected before a tap's Win key-up so Start stays
+// shut.
 constexpr WORD kMaskKey = 0xE8;
 
 constexpr UINT kMsgTap = WM_APP + 1;
@@ -126,9 +128,9 @@ DWORD g_threadId;
 HANDLE g_thread;
 HHOOK g_keyboardHook;
 HHOOK g_mouseHook;
-HWINEVENTHOOK g_foregroundHook;
-HWINEVENTHOOK g_focusHook;
-HWINEVENTHOOK g_desktopHook;
+constexpr DWORD kWinEvents[] = {EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_FOCUS,
+                                 EVENT_SYSTEM_DESKTOPSWITCH};
+HWINEVENTHOOK g_winEventHooks[ARRAYSIZE(kWinEvents)];
 
 // Key state as the hook has seen it, which separates an initial key-down from
 // an auto-repeat.
@@ -147,10 +149,8 @@ bool g_paletteForeground;
 bool g_heldKey[256];
 std::vector<INPUT> g_buffer;
 
-// Set while a typed Enter waits for the results to update.
 bool g_enterWait;
 
-// Thread timers, whose IDs SetTimer assigns.
 UINT_PTR g_deadlineTimer;
 UINT_PTR g_settleTimer;
 UINT_PTR g_enterTimer;
@@ -180,10 +180,7 @@ Hotkey ParseHotkey(PCWSTR text) {
 }
 
 std::wstring GetString(PCWSTR name) {
-    PCWSTR value = Wh_GetStringSetting(name);
-    std::wstring result = value;
-    Wh_FreeStringSetting(value);
-    return result;
+    return WindhawkUtils::StringSetting::make(name).get();
 }
 
 void LoadSettings() {
@@ -297,18 +294,18 @@ void StopBuffering() {
     StopTimer(g_settleTimer);
     StopTimer(g_enterTimer);
     ZeroMemory(g_heldKey, sizeof(g_heldKey));
+    g_buffer.clear();
 }
 
 void FlushAll() {
     std::vector<INPUT> inputs = std::move(g_buffer);
-    g_buffer.clear();
     StopBuffering();
     Send(inputs);
 }
 
-// Replays the held keys. An Enter and everything after it stay held until the
-// results update, and buffering continues meanwhile, so no key-up overtakes its
-// key-down.
+// Replays the held keys up to the first Enter. The Enter and every key after it
+// wait for the results to update, and buffering continues meanwhile so no
+// key-up overtakes its key-down.
 void Flush() {
     if (!g_buffering) {
         return;
@@ -337,11 +334,6 @@ void Flush() {
     Send(text);
 }
 
-void Discard() {
-    StopBuffering();
-    g_buffer.clear();
-}
-
 void HoldKey(const KBDLLHOOKSTRUCT* key) {
     INPUT input{};
     input.type = INPUT_KEYBOARD;
@@ -353,22 +345,24 @@ void HoldKey(const KBDLLHOOKSTRUCT* key) {
     g_buffer.push_back(input);
 }
 
-// Runs on the Win key-up of a tap, inside the keyboard hook, so it does no slow
-// work.
+// Runs inside the keyboard hook on a tap's Win key-up. Windows drops a
+// low-level hook that overruns its timeout, so slow work goes to the message
+// loop.
 void OnTap() {
     Send({MakeKey(kMaskKey, false), MakeKey(kMaskKey, true)});
 
-    // The close hotkey goes out from the message loop, after the Win key-up.
-    if (!g_settings.runCommand && IsPaletteRunning() &&
-        IsPaletteWindow(GetForegroundWindow())) {
+    bool palette = !g_settings.runCommand && IsPaletteRunning();
+
+    // The close hotkey waits for the message loop, after the Win key-up, so a
+    // hotkey without Win is not sent as Win plus that hotkey.
+    if (palette && IsPaletteWindow(GetForegroundWindow())) {
         PostThreadMessageW(g_threadId, kMsgClose, 0, 0);
         return;
     }
 
-    if (!g_settings.runCommand && IsPaletteRunning()) {
+    if (palette) {
         g_buffering = true;
         g_paletteForeground = false;
-        g_buffer.clear();
         StartTimer(g_deadlineTimer, kFlushDeadlineMs);
     }
 
@@ -376,10 +370,15 @@ void OnTap() {
 }
 
 // ShellExecute can block, so it runs on its own thread.
+struct Command {
+    std::wstring file;
+    std::wstring arguments;
+};
+
 DWORD WINAPI RunCommandThread(LPVOID param) {
-    auto* command = (Settings*)param;
+    auto* command = static_cast<Command*>(param);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    ShellExecuteW(nullptr, nullptr, command->command.c_str(),
+    ShellExecuteW(nullptr, nullptr, command->file.c_str(),
                   command->arguments.empty() ? nullptr : command->arguments.c_str(),
                   nullptr, SW_SHOWNORMAL);
     CoUninitialize();
@@ -390,7 +389,7 @@ DWORD WINAPI RunCommandThread(LPVOID param) {
 void Summon() {
     if (g_settings.runCommand) {
         if (!g_settings.command.empty()) {
-            auto* command = new Settings(g_settings);
+            auto* command = new Command{g_settings.command, g_settings.arguments};
             HANDLE thread = CreateThread(nullptr, 0, RunCommandThread, command, 0,
                                          nullptr);
             if (thread) {
@@ -492,7 +491,7 @@ LRESULT CALLBACK MouseProc(int code, WPARAM wParam, LPARAM lParam) {
 void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG, LONG,
                            DWORD, DWORD) {
     if (event == EVENT_SYSTEM_DESKTOPSWITCH) {
-        Discard();
+        StopBuffering();
         ZeroMemory(g_keyDown, sizeof(g_keyDown));
         g_winDown = false;
         return;
@@ -528,14 +527,11 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
         Wh_Log(L"SetWindowsHookEx failed: %u", GetLastError());
     }
 
-    g_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
-                                       EVENT_SYSTEM_FOREGROUND, nullptr,
-                                       WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-    g_focusHook = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, nullptr,
-                                  WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-    g_desktopHook = SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH,
-                                    EVENT_SYSTEM_DESKTOPSWITCH, nullptr,
-                                    WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    for (size_t i = 0; i < ARRAYSIZE(kWinEvents); i++) {
+        g_winEventHooks[i] =
+            SetWinEventHook(kWinEvents[i], kWinEvents[i], nullptr, WinEventProc,
+                            0, 0, WINEVENT_OUTOFCONTEXT);
+    }
 
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         switch (msg.message) {
@@ -562,9 +558,9 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
     }
 
     FlushAll();
-    UnhookWinEvent(g_desktopHook);
-    UnhookWinEvent(g_focusHook);
-    UnhookWinEvent(g_foregroundHook);
+    for (HWINEVENTHOOK hook : g_winEventHooks) {
+        UnhookWinEvent(hook);
+    }
     UnhookWindowsHookEx(g_mouseHook);
     UnhookWindowsHookEx(g_keyboardHook);
     if (g_paletteProcess) {
@@ -574,7 +570,8 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
 }
 
 BOOL WhTool_ModInit() {
-    // The thread's message queue exists before any message is posted to it.
+    // PostThreadMessage fails until the thread has a message queue, so wait for
+    // the thread to create one.
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_thread = CreateThread(nullptr, 0, HookThread, ready, 0, &g_threadId);
     if (g_thread) {
