@@ -98,7 +98,7 @@ constexpr UINT kMsgClose = WM_APP + 3;
 
 // How long typed keys wait for the palette before they go to whichever window
 // has focus.
-constexpr UINT kFlushDeadlineMs = 400;
+constexpr UINT kFlushDeadlineMs = 600;
 
 // How long to wait for the palette's search box after the palette reaches the
 // foreground, when no focus event arrives.
