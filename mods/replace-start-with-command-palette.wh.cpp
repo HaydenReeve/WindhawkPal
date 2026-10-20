@@ -147,6 +147,7 @@ HANDLE g_paletteProcess;
 bool g_buffering;
 bool g_paletteForeground;
 bool g_heldKey[256];
+bool g_sentDown[256];
 std::vector<INPUT> g_buffer;
 
 bool g_enterWait;
@@ -191,13 +192,20 @@ void LoadSettings() {
     g_settings.arguments = GetString(L"arguments");
 }
 
+// Keys that MapVirtualKey maps to their numpad scan codes unless flagged.
+bool IsExtendedKey(WORD vk) {
+    return (vk >= VK_PRIOR && vk <= VK_DOWN) || vk == VK_INSERT ||
+           vk == VK_DELETE || vk == VK_DIVIDE || vk == VK_RCONTROL ||
+           vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN || vk == VK_APPS;
+}
+
 INPUT MakeKey(WORD vk, bool up) {
     INPUT input{};
     input.type = INPUT_KEYBOARD;
     input.ki.wVk = vk;
     input.ki.wScan = (WORD)MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
     input.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-    if (vk == VK_LWIN || vk == VK_RWIN) {
+    if (IsExtendedKey(vk)) {
         input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
     }
     input.ki.dwExtraInfo = kMarker;
@@ -211,8 +219,8 @@ void Send(const std::vector<INPUT>& inputs) {
     UINT sent = SendInput((UINT)inputs.size(), const_cast<INPUT*>(inputs.data()),
                           sizeof(INPUT));
     if (sent != inputs.size()) {
-        Wh_Log(L"SendInput sent %u of %zu: %u", sent, inputs.size(),
-               GetLastError());
+        DWORD error = GetLastError();
+        Wh_Log(L"SendInput sent %u of %zu: %u", sent, inputs.size(), error);
     }
 }
 
@@ -259,14 +267,20 @@ void RefreshPaletteProcess() {
     if (snapshot == INVALID_HANDLE_VALUE) {
         return;
     }
+    DWORD session = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
     PROCESSENTRY32W entry{sizeof(entry)};
     for (BOOL ok = Process32FirstW(snapshot, &entry); ok;
          ok = Process32NextW(snapshot, &entry)) {
-        if (_wcsicmp(entry.szExeFile, kPaletteProcess) == 0) {
-            g_paletteProcess = OpenProcess(SYNCHRONIZE, FALSE, entry.th32ProcessID);
-            if (g_paletteProcess) {
-                g_palettePid = entry.th32ProcessID;
-            }
+        DWORD entrySession;
+        if (_wcsicmp(entry.szExeFile, kPaletteProcess) != 0 ||
+            !ProcessIdToSessionId(entry.th32ProcessID, &entrySession) ||
+            entrySession != session) {
+            continue;
+        }
+        g_paletteProcess = OpenProcess(SYNCHRONIZE, FALSE, entry.th32ProcessID);
+        if (g_paletteProcess) {
+            g_palettePid = entry.th32ProcessID;
             break;
         }
     }
@@ -294,7 +308,21 @@ void StopBuffering() {
     StopTimer(g_settleTimer);
     StopTimer(g_enterTimer);
     ZeroMemory(g_heldKey, sizeof(g_heldKey));
+    ZeroMemory(g_sentDown, sizeof(g_sentDown));
     g_buffer.clear();
+}
+
+// Sends the key-ups still owed for replayed key-downs and drops the rest, so no
+// key stays down.
+void ReleaseAndStop() {
+    std::vector<INPUT> ups;
+    for (const INPUT& input : g_buffer) {
+        if ((input.ki.dwFlags & KEYEVENTF_KEYUP) && g_sentDown[input.ki.wVk]) {
+            ups.push_back(input);
+        }
+    }
+    StopBuffering();
+    Send(ups);
 }
 
 void FlushAll() {
@@ -327,6 +355,9 @@ void Flush() {
 
     std::vector<INPUT> text(g_buffer.begin(), g_buffer.begin() + i);
     g_buffer.erase(g_buffer.begin(), g_buffer.begin() + i);
+    for (const INPUT& input : text) {
+        g_sentDown[input.ki.wVk] = !(input.ki.dwFlags & KEYEVENTF_KEYUP);
+    }
     g_enterWait = true;
     StopTimer(g_deadlineTimer);
     StopTimer(g_settleTimer);
@@ -351,16 +382,14 @@ void HoldKey(const KBDLLHOOKSTRUCT* key) {
 void OnTap() {
     Send({MakeKey(kMaskKey, false), MakeKey(kMaskKey, true)});
 
-    bool palette = !g_settings.runCommand && IsPaletteRunning();
-
     // The close hotkey waits for the message loop, after the Win key-up, so a
     // hotkey without Win is not sent as Win plus that hotkey.
-    if (palette && IsPaletteWindow(GetForegroundWindow())) {
+    if (!g_settings.runCommand && IsPaletteWindow(GetForegroundWindow())) {
         PostThreadMessageW(g_threadId, kMsgClose, 0, 0);
         return;
     }
 
-    if (palette) {
+    if (!g_settings.runCommand) {
         g_buffering = true;
         g_paletteForeground = false;
         StartTimer(g_deadlineTimer, kFlushDeadlineMs);
@@ -378,9 +407,14 @@ struct Command {
 DWORD WINAPI RunCommandThread(LPVOID param) {
     auto* command = static_cast<Command*>(param);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    ShellExecuteW(nullptr, nullptr, command->file.c_str(),
-                  command->arguments.empty() ? nullptr : command->arguments.c_str(),
-                  nullptr, SW_SHOWNORMAL);
+    auto result = (INT_PTR)ShellExecuteW(
+        nullptr, nullptr, command->file.c_str(),
+        command->arguments.empty() ? nullptr : command->arguments.c_str(), nullptr,
+        SW_SHOWNORMAL);
+    if (result <= 32) {
+        DWORD error = GetLastError();
+        Wh_Log(L"ShellExecute failed: %d, %u", (int)result, error);
+    }
     CoUninitialize();
     delete command;
     return 0;
@@ -389,6 +423,7 @@ DWORD WINAPI RunCommandThread(LPVOID param) {
 void Summon() {
     if (g_settings.runCommand) {
         if (!g_settings.command.empty()) {
+            AllowSetForegroundWindow(ASFW_ANY);
             auto* command = new Command{g_settings.command, g_settings.arguments};
             HANDLE thread = CreateThread(nullptr, 0, RunCommandThread, command, 0,
                                          nullptr);
@@ -408,15 +443,16 @@ void Summon() {
         return;
     }
 
+    AllowSetForegroundWindow(g_palettePid);
     if (g_settings.pageHotkey.vk) {
         SendHotkey(g_settings.pageHotkey);
         return;
     }
 
-    AllowSetForegroundWindow(g_palettePid);
     HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, kShowEvent);
     if (!event) {
-        Wh_Log(L"OpenEvent failed: %u", GetLastError());
+        DWORD error = GetLastError();
+        Wh_Log(L"OpenEvent failed: %u", error);
         Flush();
         return;
     }
@@ -440,6 +476,10 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
     g_keyDown[vk] = !up;
     bool isWin = vk == VK_LWIN || vk == VK_RWIN;
 
+    if (g_buffering && isWin && initialDown) {
+        FlushAll();
+    }
+
     if (g_buffering) {
         // Keys held since before the tap pass through, so a push-to-talk
         // release reaches its app straight away.
@@ -451,11 +491,6 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
                 g_heldKey[vk] = false;
             }
             HoldKey(key);
-            if (isWin && initialDown) {
-                Flush();
-                g_winDown = true;
-                g_chord = false;
-            }
             return 1;
         }
     }
@@ -491,7 +526,7 @@ LRESULT CALLBACK MouseProc(int code, WPARAM wParam, LPARAM lParam) {
 void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG, LONG,
                            DWORD, DWORD) {
     if (event == EVENT_SYSTEM_DESKTOPSWITCH) {
-        StopBuffering();
+        ReleaseAndStop();
         ZeroMemory(g_keyDown, sizeof(g_keyDown));
         g_winDown = false;
         return;
@@ -505,6 +540,8 @@ void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG, LONG,
         g_paletteForeground = IsPaletteWindow(hwnd);
         if (g_paletteForeground) {
             StartTimer(g_settleTimer, kSettleMs);
+        } else {
+            StopTimer(g_settleTimer);
         }
     } else if (event == EVENT_OBJECT_FOCUS && g_paletteForeground &&
                IsPaletteWindow(hwnd)) {
@@ -522,9 +559,14 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
 
     HMODULE module = GetModuleHandleW(nullptr);
     g_keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardProc, module, 0);
+    if (!g_keyboardHook) {
+        DWORD error = GetLastError();
+        Wh_Log(L"Keyboard hook failed: %u", error);
+    }
     g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseProc, module, 0);
-    if (!g_keyboardHook || !g_mouseHook) {
-        Wh_Log(L"SetWindowsHookEx failed: %u", GetLastError());
+    if (!g_mouseHook) {
+        DWORD error = GetLastError();
+        Wh_Log(L"Mouse hook failed: %u", error);
     }
 
     for (size_t i = 0; i < ARRAYSIZE(kWinEvents); i++) {

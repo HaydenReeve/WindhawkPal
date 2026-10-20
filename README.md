@@ -99,10 +99,12 @@ windhawk-cli mod config set local@replace-start-with-command-palette loggingEnab
 
 | Log line | Meaning |
 | --- | --- |
-| `SetWindowsHookEx failed: <error>` | The keyboard or mouse hook failed to install, so the mod sees no Win taps. |
+| `Keyboard hook failed: <error>` | The keyboard hook failed to install, so the mod sees no Win taps. |
+| `Mouse hook failed: <error>` | The mouse hook failed to install, so a Win+click counts as a tap. |
 | `Command Palette is not running` | A tap found no `Microsoft.CmdPal.UI.exe` process, so typed keys replay to the window with focus. |
 | `OpenEvent failed: <error>` | The mod found Command Palette but could not open its show event, so typed keys replay to the window with focus. |
 | `SendInput sent <n> of <total>: <error>` | Windows accepted only part of the mod's injected input, which covers the Start mask, hotkeys, and replayed keys. |
+| `ShellExecute failed: <code>, <error>` | The `command` setting failed to open. |
 
 ### A tap does nothing
 
@@ -111,7 +113,7 @@ The Start menu stays shut and the palette stays hidden.
 - Check Command Palette is running; the log shows `Command Palette is not running` when it isn't.
 - Check the log for `OpenEvent failed`, which means the show event is unavailable.
 - With a page hotkey set, check it matches a command hotkey set in Command Palette.
-- With `action` set to `command`, check the `command` setting holds a program, file, folder, or URI.
+- With `action` set to `command`, check the `command` setting holds a program, file, folder, or URI, and check the log for `ShellExecute failed`.
 - If a second tap fails to close the palette, check `paletteHotkey` matches Command Palette's activation hotkey.
 
 ### Start opens instead
@@ -121,7 +123,7 @@ The Win key reaches Windows unmasked.
 - Check the mod is enabled with `windhawk-cli mod list`; the mod's line reads `enabled`.
 - Check Sticky Keys is off.
 - Check no other key went down and no mouse button was clicked while Win was held, since either makes a chord.
-- Check the log for `SetWindowsHookEx failed`.
+- Check the log for `Keyboard hook failed`.
 - Check the log for `SendInput sent`, which shows the mask key was blocked.
 
 ### Typed keys go missing
