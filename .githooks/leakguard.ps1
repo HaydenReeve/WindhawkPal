@@ -32,12 +32,26 @@ if (-not $denylistPath -or -not (Test-Path -LiteralPath $denylistPath -PathType 
     Fail 'denylist is not configured. Set it with: git config --local leakguard.denylist <path>'
 }
 
+# Optional: a missing key means no allowlist; a key naming a missing file blocks.
+$allowlistPath = git config --type=path leakguard.allowlist 2>$null
+if ($allowlistPath -and -not (Test-Path -LiteralPath $allowlistPath -PathType Leaf)) {
+    Fail 'allowlist file is missing. Fix or unset: git config --local leakguard.allowlist <path>'
+}
+
 # --- Terms ---------------------------------------------------------------------
 
 $denyTerms = @(Get-Content -LiteralPath $denylistPath -Encoding utf8 |
     ForEach-Object { $_.Trim() } |
     Where-Object { $_ -and -not $_.StartsWith('#') } |
     Select-Object -Unique)
+
+# Exact strings, longest first, removed from a line before the identity and
+# denylist rules test it.
+$allowTerms = @($allowlistPath ? (Get-Content -LiteralPath $allowlistPath -Encoding utf8 |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and -not $_.StartsWith('#') } |
+        Select-Object -Unique |
+        Sort-Object Length -Descending) : @())
 
 $identityTerms = [Collections.Generic.List[string]]::new()
 $userName = git config user.name 2>$null
@@ -77,8 +91,10 @@ function Test-Line([string]$Text, [string]$Location) {
     foreach ($m in [regex]::Matches($Text, $emailPattern)) {
         if ($m.Value -notmatch '(?i)noreply') { $findings.Add("email $Location"); break }
     }
-    if (Test-ContainsAny $Text $identityTerms) { $findings.Add("identity $Location") }
-    if (Test-ContainsAny $Text $denyTerms) { $findings.Add("denylist $Location") }
+    $termText = $Text
+    foreach ($term in $allowTerms) { $termText = $termText.Replace($term, '') }
+    if (Test-ContainsAny $termText $identityTerms) { $findings.Add("identity $Location") }
+    if (Test-ContainsAny $termText $denyTerms) { $findings.Add("denylist $Location") }
 }
 
 # Scans the added lines of a unified diff produced with -U0.

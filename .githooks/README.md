@@ -25,3 +25,9 @@ git config --local leakguard.denylist <path>
 ```
 
 The denylist file holds one term per line. The guard skips blank lines and lines starting with `#`.
+
+Optionally, point `leakguard.allowlist` at a file of exact strings that may appear, such as your public handle. The guard removes each one (case-sensitive) from a line before the `identity` and `denylist` rules test it, so the same term elsewhere still blocks. It uses the denylist's file format, and a configured allowlist file that is missing blocks every commit and push.
+
+```sh
+git config --local leakguard.allowlist <path>
+```
