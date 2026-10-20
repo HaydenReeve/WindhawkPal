@@ -11,8 +11,8 @@ The real start menu is still accessible through the normal channels, such as `Ct
 ## Requirements
 
 - Windows 11
-- Windhawk 2.0, with its development tools to compile the mod from source
-- PowerToys Command Palette, running
+- Windhawk 2.0
+- PowerToys Command Palette
 
 ## Install
 
