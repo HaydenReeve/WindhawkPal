@@ -373,6 +373,12 @@ void HoldKey(const KBDLLHOOKSTRUCT* key) {
     input.ki.wScan = (WORD)key->scanCode;
     if (key->flags & LLKHF_EXTENDED) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
     if (key->flags & LLKHF_UP) input.ki.dwFlags |= KEYEVENTF_KEYUP;
+    // Injected Unicode text arrives as VK_PACKET with its character in the scan
+    // code.
+    if (key->vkCode == VK_PACKET) {
+        input.ki.wVk = 0;
+        input.ki.dwFlags |= KEYEVENTF_UNICODE;
+    }
     input.ki.dwExtraInfo = kMarker;
     g_buffer.push_back(input);
 }
