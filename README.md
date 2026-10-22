@@ -65,7 +65,7 @@ windhawk-cli mod settings set local@replace-start-with-command-palette <key>=<va
 
 The mod runs in Windhawk's UI access process, so it also works while an elevated window has focus.
 
-1. **Detect the tap.** A low-level keyboard hook keeps its own key-down table. A new key pressed while Win is down, or a mouse click, makes a chord. Repeats of a key held from before the Win press don't count, so a held push-to-talk key keeps the tap. Ctrl, Alt, or Shift held from before the Win press makes a chord. Left and right Win count alike.
+1. **Detect the tap.** A low-level keyboard hook keeps its own key-down table. A new key pressed while Win is down, or a mouse click, makes a chord. Repeats of a key held from before the Win press don't count, so a held push-to-talk key keeps the tap. Ctrl, Alt, or Shift still held at the Win release makes a chord. Left and right Win count alike.
 2. **Mask Start.** On a tap, or a click with Win held, the hook sends the unassigned key VK `0xE8` before Windows sees the Win release, so the Start menu stays shut.
 3. **Summon.** The mod calls `AllowSetForegroundWindow` on the Command Palette process, then signals Command Palette's show event. With a page hotkey set, it sends that hotkey instead. With `action` set to `command`, it runs the command on its own thread. A tap while the palette is in front sends the palette hotkey, which closes it.
 4. **Buffer and replay.** Keys typed after the tap are held and replayed into the palette on its first focus event, or 50 ms after it takes the foreground. In the palette, an Enter and the keys after it wait a further 150 ms, so the results update before Enter lands. After a 600 ms deadline, every held key, Enter included, replays to whichever window has focus.
@@ -132,7 +132,6 @@ The keys typed after a tap land outside the search box.
 
 - Check the palette appears within 600 ms of the tap; after that, held keys replay to the window with focus.
 - Check the log for `SendInput sent`, which shows replayed keys were blocked.
-- Check for a modifier held from before the tap, which applies live to the window with focus.
 
 ## Licence
 

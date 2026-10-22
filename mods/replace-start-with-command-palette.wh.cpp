@@ -25,8 +25,8 @@ Start. Win+key shortcuts and the Start button work as usual, and disabling the
 mod brings the stock Start menu back.
 
 A tap still counts while you hold a key pressed before it, such as a
-push-to-talk key. Ctrl, Alt, and Shift are the exception: Win with one of them
-held is a chord.
+push-to-talk key. Ctrl, Alt, and Shift are the exception: releasing Win while
+one of them is held is a chord.
 
 In the settings, you can pick a palette page to open or a command to run. The
 palette must be running.
@@ -259,6 +259,16 @@ void SendHotkey(const Hotkey& hotkey) {
     Send(inputs);
 }
 
+void SendMaskKey() {
+    Send({MakeKey(kMaskKey, false), MakeKey(kMaskKey, true)});
+}
+
+bool IsModifierDown() {
+    return g_keyDown[VK_LCONTROL] || g_keyDown[VK_RCONTROL] ||
+           g_keyDown[VK_LMENU] || g_keyDown[VK_RMENU] ||
+           g_keyDown[VK_LSHIFT] || g_keyDown[VK_RSHIFT];
+}
+
 bool IsPaletteRunning() {
     return g_paletteProcess &&
            WaitForSingleObject(g_paletteProcess, 0) == WAIT_TIMEOUT;
@@ -398,7 +408,7 @@ void HoldKey(const KBDLLHOOKSTRUCT* key) {
 // low-level hook that overruns its timeout, so slow work goes to the message
 // loop.
 void OnTap() {
-    Send({MakeKey(kMaskKey, false), MakeKey(kMaskKey, true)});
+    SendMaskKey();
 
     // The close hotkey waits for the message loop, after the Win key-up, so a
     // hotkey without Win is not sent as Win plus that hotkey.
@@ -515,17 +525,20 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
 
     if (isWin && initialDown && !g_winDown) {
         g_winDown = true;
-        // A modifier held before Win makes a chord, and other held keys do not.
-        g_chord = g_keyDown[VK_LCONTROL] || g_keyDown[VK_RCONTROL] ||
-                  g_keyDown[VK_LMENU] || g_keyDown[VK_RMENU] ||
-                  g_keyDown[VK_LSHIFT] || g_keyDown[VK_RSHIFT];
+        g_chord = false;
     } else if (!isWin && initialDown && g_winDown) {
         g_chord = true;
     } else if (isWin && up && g_winDown && !g_keyDown[VK_LWIN] &&
                !g_keyDown[VK_RWIN]) {
         g_winDown = false;
         if (!g_chord && !IsStickyKeysOn()) {
-            OnTap();
+            // A modifier still held at the Win release makes a chord, so a
+            // modifier rolled into the tap still counts as a tap.
+            if (IsModifierDown()) {
+                SendMaskKey();
+            } else {
+                OnTap();
+            }
         }
     }
 
@@ -537,7 +550,7 @@ void OnMouseButton(bool wheel) {
         // Windows opens Start when Win is released after only a click, so the
         // mask key keeps it shut.
         if (!g_chord) {
-            Send({MakeKey(kMaskKey, false), MakeKey(kMaskKey, true)});
+            SendMaskKey();
         }
         g_chord = true;
     }
