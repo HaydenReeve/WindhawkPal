@@ -2,7 +2,7 @@
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
 // @description     Tap the Win key to open PowerToys Command Palette in place of the Start menu
-// @version         0.3.0
+// @version         0.3.1
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
 // @include         windhawk-mod-uiaccess.exe
@@ -534,6 +534,11 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
 
 void OnMouseButton(bool wheel) {
     if (g_winDown) {
+        // Windows opens Start when Win is released after only a click, so the
+        // mask key keeps it shut.
+        if (!g_chord) {
+            Send({MakeKey(kMaskKey, false), MakeKey(kMaskKey, true)});
+        }
         g_chord = true;
     }
     if (g_buffering && !wheel) {
