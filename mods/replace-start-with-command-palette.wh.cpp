@@ -2,7 +2,7 @@
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
 // @description     Tap the Win key to open PowerToys Command Palette in place of the Start menu
-// @version         0.2.1
+// @version         0.3.0
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
 // @include         windhawk-mod-uiaccess.exe
@@ -74,6 +74,14 @@ The mod does nothing while Sticky Keys is on.
 - arguments: ''
   $name: Arguments
   $description: Arguments passed to the command
+- mouseInput: hook
+  $name: Mouse input
+  $description: >-
+    How the mod sees mouse clicks. Raw Input never delays the mouse, but only
+    one mod in Windhawk's UI access process can use it
+  $options:
+  - hook: Low-level hook
+  - rawInput: Raw Input
 */
 // ==/WindhawkModSettings==
 
@@ -123,12 +131,14 @@ struct Settings {
     Hotkey paletteHotkey;
     std::wstring command;
     std::wstring arguments;
+    bool rawInput;
 } g_settings;
 
 DWORD g_threadId;
 HANDLE g_thread;
 HHOOK g_keyboardHook;
 HHOOK g_mouseHook;
+HWND g_rawInputWindow;
 constexpr DWORD kWinEvents[] = {EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_FOCUS,
                                  EVENT_SYSTEM_DESKTOPSWITCH};
 HWINEVENTHOOK g_winEventHooks[ARRAYSIZE(kWinEvents)];
@@ -191,6 +201,7 @@ void LoadSettings() {
     g_settings.paletteHotkey = ParseHotkey(GetString(L"paletteHotkey").c_str());
     g_settings.command = GetString(L"command");
     g_settings.arguments = GetString(L"arguments");
+    g_settings.rawInput = GetString(L"mouseInput") == L"rawInput";
 }
 
 // Keys that MapVirtualKey maps to their numpad scan codes unless flagged.
@@ -521,16 +532,70 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
+void OnMouseButton(bool wheel) {
+    if (g_winDown) {
+        g_chord = true;
+    }
+    if (g_buffering && !wheel) {
+        Flush();
+    }
+}
+
 LRESULT CALLBACK MouseProc(int code, WPARAM wParam, LPARAM lParam) {
     if (code == HC_ACTION && wParam != WM_MOUSEMOVE) {
-        if (g_winDown) {
-            g_chord = true;
-        }
-        if (g_buffering && wParam != WM_MOUSEWHEEL && wParam != WM_MOUSEHWHEEL) {
-            Flush();
-        }
+        OnMouseButton(wParam == WM_MOUSEWHEEL || wParam == WM_MOUSEHWHEEL);
     }
     return CallNextHookEx(nullptr, code, wParam, lParam);
+}
+
+void OnRawInput(HRAWINPUT handle) {
+    RAWINPUT input;
+    UINT size = sizeof(input);
+    if (GetRawInputData(handle, RID_INPUT, &input, &size,
+                        sizeof(RAWINPUTHEADER)) == (UINT)-1 ||
+        input.header.dwType != RIM_TYPEMOUSE) {
+        return;
+    }
+    USHORT buttons = input.data.mouse.usButtonFlags;
+    if (buttons) {
+        OnMouseButton(!(buttons & ~(RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL)));
+    }
+}
+
+// Raw Input reports mouse events after they happen, so it never delays the
+// mouse as a low-level hook can.
+void StartMouseInput() {
+    if (!g_settings.rawInput) {
+        g_mouseHook =
+            SetWindowsHookExW(WH_MOUSE_LL, MouseProc, GetModuleHandleW(nullptr), 0);
+        if (!g_mouseHook) {
+            DWORD error = GetLastError();
+            Wh_Log(L"Mouse hook failed: %u", error);
+        }
+        return;
+    }
+
+    g_rawInputWindow = CreateWindowExW(0, L"STATIC", nullptr, 0, 0, 0, 0, 0,
+                                       HWND_MESSAGE, nullptr, nullptr, nullptr);
+    RAWINPUTDEVICE device{0x01, 0x02, RIDEV_INPUTSINK, g_rawInputWindow};
+    if (!g_rawInputWindow ||
+        !RegisterRawInputDevices(&device, 1, sizeof(device))) {
+        DWORD error = GetLastError();
+        Wh_Log(L"Raw Input registration failed: %u", error);
+    }
+}
+
+void StopMouseInput() {
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = nullptr;
+    }
+    if (g_rawInputWindow) {
+        RAWINPUTDEVICE device{0x01, 0x02, RIDEV_REMOVE, nullptr};
+        RegisterRawInputDevices(&device, 1, sizeof(device));
+        DestroyWindow(g_rawInputWindow);
+        g_rawInputWindow = nullptr;
+    }
 }
 
 void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG, LONG,
@@ -573,11 +638,7 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
         DWORD error = GetLastError();
         Wh_Log(L"Keyboard hook failed: %u", error);
     }
-    g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseProc, module, 0);
-    if (!g_mouseHook) {
-        DWORD error = GetLastError();
-        Wh_Log(L"Mouse hook failed: %u", error);
-    }
+    StartMouseInput();
 
     for (size_t i = 0; i < ARRAYSIZE(kWinEvents); i++) {
         g_winEventHooks[i] =
@@ -591,7 +652,13 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
                 Summon();
                 break;
             case kMsgReloadSettings:
+                StopMouseInput();
                 LoadSettings();
+                StartMouseInput();
+                break;
+            case WM_INPUT:
+                OnRawInput((HRAWINPUT)msg.lParam);
+                DispatchMessageW(&msg);
                 break;
             case kMsgClose:
                 SendHotkey(g_settings.paletteHotkey);
@@ -615,7 +682,7 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
     for (HWINEVENTHOOK hook : g_winEventHooks) {
         UnhookWinEvent(hook);
     }
-    UnhookWindowsHookEx(g_mouseHook);
+    StopMouseInput();
     UnhookWindowsHookEx(g_keyboardHook);
     if (g_paletteProcess) {
         CloseHandle(g_paletteProcess);

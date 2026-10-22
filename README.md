@@ -51,6 +51,7 @@ Each setting appears on the mod's Settings tab in Windhawk.
 | `paletteHotkey` | Command Palette's activation hotkey, as set in Command Palette. A tap sends it to close the palette while the palette is in front. | `alt+win+32` (Alt+Win+Space) |
 | `command` | The program, file, folder, or URI a Win tap opens when `action` is `command`. | empty |
 | `arguments` | Arguments passed to the command. | empty |
+| `mouseInput` | How the mod sees mouse clicks: `hook` uses a low-level mouse hook, and `rawInput` uses Raw Input, which never delays the mouse. Only one mod in Windhawk's UI access process can use Raw Input. | `hook` |
 
 A hotkey's stored form is `[ctrl+][alt+][shift+][win+]<vk>`, where `<vk>` is the key's virtual-key code in decimal, so `32` is Space.
 
