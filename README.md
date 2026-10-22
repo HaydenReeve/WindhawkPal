@@ -133,6 +133,18 @@ The keys typed after a tap land outside the search box.
 - Check the palette appears within 600 ms of the tap; after that, held keys replay to the window with focus.
 - Check the log for `SendInput sent`, which shows replayed keys were blocked.
 
+## Tests
+
+The unit tests in `tests\` compile the mod source against fake Windhawk headers and drive its hooks with synthetic events, so they never touch the desktop. They cover tap judgement, the Start mask, and the type-ahead buffer.
+
+From the repository root, run:
+
+```powershell
+.\tests\run.ps1
+```
+
+The script uses Windhawk's bundled clang, or `clang++` on `PATH` when Windhawk is not installed. The `pre-push` hook runs the tests after the leak guard, and GitHub Actions runs them on every push.
+
 ## Licence
 
 The mod is licensed under GPL-3.0; see [LICENSE](LICENSE).

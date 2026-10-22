@@ -1,2 +1,3 @@
 #!/usr/bin/env sh
-exec pwsh -NoProfile -File "$(dirname "$0")/leakguard.ps1" pre-push "$@"
+pwsh -NoProfile -File "$(dirname "$0")/leakguard.ps1" pre-push "$@" || exit 1
+exec pwsh -NoProfile -File "$(dirname "$0")/../tests/run.ps1"
