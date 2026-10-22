@@ -2,7 +2,7 @@
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
 // @description     Tap the Win key to open PowerToys Command Palette in place of the Start menu
-// @version         0.2.0
+// @version         0.2.1
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
 // @include         windhawk-mod-uiaccess.exe
@@ -25,7 +25,8 @@ Start. Win+key shortcuts and the Start button work as usual, and disabling the
 mod brings the stock Start menu back.
 
 A tap still counts while you hold a key pressed before it, such as a
-push-to-talk key.
+push-to-talk key. Ctrl, Alt, and Shift are the exception: Win with one of them
+held is a chord.
 
 In the settings, you can pick a palette page to open or a command to run. The
 palette must be running.
@@ -497,7 +498,10 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
 
     if (isWin && initialDown && !g_winDown) {
         g_winDown = true;
-        g_chord = false;
+        // A modifier held before Win makes a chord, and other held keys do not.
+        g_chord = g_keyDown[VK_LCONTROL] || g_keyDown[VK_RCONTROL] ||
+                  g_keyDown[VK_LMENU] || g_keyDown[VK_RMENU] ||
+                  g_keyDown[VK_LSHIFT] || g_keyDown[VK_RSHIFT];
     } else if (!isWin && initialDown && g_winDown) {
         g_chord = true;
     } else if (isWin && up && g_winDown && !g_keyDown[VK_LWIN] &&
