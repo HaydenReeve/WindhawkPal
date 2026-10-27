@@ -1,17 +1,17 @@
 # Replace Start with Command Palette
 
-On Windows when you press the `Win` key normally the Start Menu opens. With this mod, PowerToys Command Palette opens instead.
+Tap the Win key and PowerToys Command Palette opens in place of Start.
 
-The Start Menu's search runs on Windows Search: It's slow. _Really_ slow. Most of the menu is generally space you never use. In my workflows, I find I basically never want the Start Menu, it's just a useful quick launcher via `Win + "Program Name"`. Command Palette is faster, ranks apps well, and extensions such as Everything make file search excellent.
+Start's search runs on Windows Search, and Windows Search is slow. Most of the menu is pins and recommendations. Command Palette opens fast, ranks apps well, and with extensions such as Everything, file search becomes useful again.
 
-This mod handles masking that `Win` shortcut without interfering with your other usual hotkeys. It also smartly attaches focus, buffers any search input, and generally just makes life a little nicer.
+Your Win+key shortcuts keep working. Typing is buffered straight into the palette's search box, before it has finished appearing. Tap again to close it.
 
-The real start menu is still accessible through the normal channels, such as `Ctrl+Esc` or clicking the Start button with the mouse.
+You can still access the traditional Start Menu with `Ctrl+Esc` or through the taskbar icon directly.
 
 ## Requirements
 
 - Windows 11
-- Windhawk 2.0
+- Windhawk 2.0 or later
 - PowerToys Command Palette
 
 ## Install
@@ -20,19 +20,13 @@ The mod installs from its source file, `mods\replace-start-with-command-palette.
 
 ### Windhawk UI
 
-Replace Start with Command Palette is coming soon to the Windhawk mod gallery.
-
-For now, you can install it manually via the UI like so:
-
 1. Create a new mod in Windhawk.
 2. Replace the template with the contents of `replace-start-with-command-palette.wh.cpp`.
 3. Compile the mod.
 
-These steps follow Windhawk's editor; check Windhawk's own documentation if something has drifted.
-
 ### Windhawk CLI
 
-From an elevated shell in the repository root, run `windhawk-cli.exe` from Windhawk's install folder:
+Run the command from an elevated shell in the repository root, with Windhawk's install folder on `PATH`.
 
 ```powershell
 windhawk-cli mod install --file mods\replace-start-with-command-palette.wh.cpp
@@ -55,7 +49,7 @@ Each setting appears on the mod's Settings tab in Windhawk.
 
 A hotkey's stored form is `[ctrl+][alt+][shift+][win+]<vk>`, where `<vk>` is the key's virtual-key code in decimal, so `32` is Space.
 
-The CLI sets any key as a `key=value` pair:
+From an elevated shell, the CLI sets any key as a `key=value` pair.
 
 ```powershell
 windhawk-cli mod settings set local@replace-start-with-command-palette <key>=<value>
@@ -66,18 +60,16 @@ windhawk-cli mod settings set local@replace-start-with-command-palette <key>=<va
 The mod runs in Windhawk's UI access process, so it also works while an elevated window has focus.
 
 1. **Detect the tap.** A low-level keyboard hook keeps its own key-down table. A new key pressed while Win is down, or a mouse click, makes a chord. Repeats of a key held from before the Win press don't count, so a held push-to-talk key keeps the tap. Ctrl, Alt, or Shift still held at the Win release makes a chord. Left and right Win count alike.
-2. **Mask Start.** On a tap, or a click with Win held, the hook sends the unassigned key VK `0xE8` before Windows sees the Win release, so the Start menu stays shut.
+2. **Mask Start.** On a tap, or a click with Win held, the hook sends the unassigned key VK `0xE8` before Windows sees the Win release, so the Start Menu stays shut.
 3. **Summon.** The mod calls `AllowSetForegroundWindow` on the Command Palette process, then signals Command Palette's show event. With a page hotkey set, it sends that hotkey instead. With `action` set to `command`, it runs the command on its own thread. A tap while the palette is in front sends the palette hotkey, which closes it.
-4. **Buffer and replay.** Keys typed after the tap are held and replayed into the palette on its first focus event, or 50 ms after it takes the foreground. In the palette, an Enter and the keys after it wait a further 150 ms, so the results update before Enter lands. After a 600 ms deadline, every held key, Enter included, replays to whichever window has focus.
+4. **Buffer and replay.** Keys typed after the tap are held and replayed into the palette when its search box is ready. In the palette, an Enter and the keys after it wait briefly so the results update first. After a 600 ms deadline, every held key, Enter included, replays to whichever window has focus.
 
 ## Limits
-
-The code sets these bounds on what the mod does.
 
 - While Sticky Keys is on, the mod does nothing.
 - Command Palette must be running for a tap to open it.
 - The show event and the VK `0xE8` mask rely on undocumented behaviour of Command Palette and Windows.
-- While the mod's process is stopped, the Win key opens Start.
+- While Windhawk's UI access process is stopped, the Win key opens Start.
 
 ## Debugging
 
@@ -91,7 +83,7 @@ Logs show what the mod sees on each tap.
 2. Turn on **Debug logging** → **Mod logs**.
 3. Select **Show log output**.
 
-The CLI turns on the same logs:
+From an elevated shell, the CLI turns on the same logs.
 
 ```powershell
 windhawk-cli mod config set local@replace-start-with-command-palette loggingEnabled true
@@ -101,6 +93,7 @@ windhawk-cli mod config set local@replace-start-with-command-palette loggingEnab
 | --- | --- |
 | `Keyboard hook failed: <error>` | The keyboard hook failed to install, so the mod sees no Win taps. |
 | `Mouse hook failed: <error>` | The mouse hook failed to install, so a Win+click counts as a tap. |
+| `Raw Input registration failed: <error>` | Raw Input failed to register, so a Win+click counts as a tap. Set `mouseInput` to `hook`. |
 | `Command Palette is not running` | A tap found no `Microsoft.CmdPal.UI.exe` process, so typed keys replay to the window with focus. |
 | `OpenEvent failed: <error>` | The mod found Command Palette but could not open its show event, so typed keys replay to the window with focus. |
 | `SendInput sent <n> of <total>: <error>` | Windows accepted only part of the mod's injected input, which covers the Start mask, hotkeys, and replayed keys. |
@@ -108,13 +101,16 @@ windhawk-cli mod config set local@replace-start-with-command-palette loggingEnab
 
 ### A tap does nothing
 
-The Start menu stays shut and the palette stays hidden.
+The Start Menu stays shut and the palette stays hidden.
 
-- Check Command Palette is running; the log shows `Command Palette is not running` when it isn't.
+- Check Command Palette is running. If it isn't, the log shows `Command Palette is not running`.
 - Check the log for `OpenEvent failed`, which means the show event is unavailable.
 - With a page hotkey set, check it matches a command hotkey set in Command Palette.
 - With `action` set to `command`, check the `command` setting holds a program, file, folder, or URI, and check the log for `ShellExecute failed`.
-- If a second tap fails to close the palette, check `paletteHotkey` matches Command Palette's activation hotkey.
+
+### A second tap leaves the palette open
+
+- Check `paletteHotkey` matches Command Palette's activation hotkey.
 
 ### Start opens instead
 
@@ -122,13 +118,12 @@ The Win key reaches Windows unmasked.
 
 - Check the mod is enabled with `windhawk-cli mod list`; the mod's line reads `enabled`.
 - Check Sticky Keys is off.
-- Check no other key went down and no mouse button was clicked while Win was held, since either makes a chord.
 - Check the log for `Keyboard hook failed`.
 - Check the log for `SendInput sent`, which shows the mask key was blocked.
 
 ### Typed keys go missing
 
-The keys typed after a tap land outside the search box.
+The keys typed after a tap go to a window other than the palette's search box.
 
 - Check the palette appears within 600 ms of the tap; after that, held keys replay to the window with focus.
 - Check the log for `SendInput sent`, which shows replayed keys were blocked.
@@ -137,13 +132,13 @@ The keys typed after a tap land outside the search box.
 
 The unit tests in `tests\` compile the mod source against fake Windhawk headers and drive its hooks with synthetic events, so they never touch the desktop. They cover tap judgement, the Start mask, and the type-ahead buffer.
 
-From the repository root, run:
+Run the tests from the repository root.
 
 ```powershell
 .\tests\run.ps1
 ```
 
-The script uses Windhawk's bundled clang, or `clang++` on `PATH` when Windhawk is not installed. The `pre-push` hook runs the tests after the leak guard, and GitHub Actions runs them on every push.
+The script uses Windhawk's bundled clang when it is installed, and otherwise `clang++` on `PATH`. The `pre-push` hook runs the tests after the leak guard, and GitHub Actions runs them on every push and pull request.
 
 ## Licence
 

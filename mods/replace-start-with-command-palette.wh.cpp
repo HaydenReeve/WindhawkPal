@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
-// @description     Tap the Win key to open PowerToys Command Palette in place of the Start menu
+// @description     Tap the Win key to open PowerToys Command Palette in place of the Start Menu
 // @version         0.3.1
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
@@ -15,21 +15,21 @@
 
 Tap the Win key and PowerToys Command Palette opens in place of Start.
 
-Start's search runs on Windows Search, and its results are slow to trust. Most
-of the menu is space you never use. Command Palette ranks apps well, and
+Start's search runs on Windows Search, which is slow. Most of the menu is space you never use. Command Palette ranks apps well, and
 extensions such as Everything make file search excellent.
 
 This mod sends a lone Win key tap to Command Palette, and a second tap closes
-it. Keys you type straight after the tap land in the search box, as they do in
+it. Keys you type straight after the tap go into the search box, as they do in
 Start. Win+key shortcuts and the Start button work as usual, and disabling the
-mod brings the stock Start menu back.
+mod brings the stock Start Menu back.
 
 A tap still counts while you hold a key pressed before it, such as a
-push-to-talk key. Ctrl, Alt, and Shift are the exception: releasing Win while
-one of them is held is a chord.
+push-to-talk key. Ctrl, Alt, and Shift are the exception, and releasing Win
+while one of them is held makes a chord.
 
-In the settings, you can pick a palette page to open or a command to run. The
-palette must be running.
+In the settings, you can pick a palette page to open or a command to run.
+
+Command Palette must be running for a tap to open it.
 
 ## How it works
 
@@ -37,10 +37,10 @@ The mod runs in Windhawk's UI access process, so it also works while an
 elevated window has focus.
 
 A low-level keyboard hook decides when a Win press is a tap. On a tap, the hook
-sends an unassigned key before Windows sees the Win release, so the Start menu
+sends an unassigned key before Windows sees the Win release, so the Start Menu
 stays shut. The mod then opens the palette or runs the command.
 
-While the mod's process is stopped, the Win key opens the Start menu.
+While Windhawk's UI access process is stopped, the Win key opens the Start Menu.
 
 The mod does nothing while Sticky Keys is on.
 */
