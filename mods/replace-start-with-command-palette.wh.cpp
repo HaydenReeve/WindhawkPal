@@ -2,7 +2,7 @@
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
 // @description     Tap the Win key to open PowerToys Command Palette in place of the Start Menu
-// @version         0.3.1
+// @version         1.0.0
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
 // @include         windhawk-mod-uiaccess.exe
