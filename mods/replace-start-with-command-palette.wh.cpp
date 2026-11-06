@@ -2,7 +2,7 @@
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
 // @description     Tap the Win key to open PowerToys Command Palette in place of the Start Menu
-// @version         1.0.1
+// @version         1.0.0
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
 // @include         windhawk-mod-uiaccess.exe
@@ -26,9 +26,6 @@ mod brings the stock Start Menu back.
 A tap still counts while you hold a key pressed before it, such as a
 push-to-talk key. Ctrl, Alt, and Shift are the exception, and releasing Win
 while one of them is held makes a chord.
-
-A Win press within 80 ms of a Win release is ignored, so a worn switch that
-bounces on release still counts as one tap.
 
 In the settings, you can pick a palette page to open or a command to run.
 
@@ -119,10 +116,6 @@ constexpr UINT kSettleMs = 50;
 // How long Enter waits after the typed text, so the results can update.
 constexpr UINT kEnterDelayMs = 150;
 
-// How soon after a Win release the hook swallows a Win press as switch
-// chatter.
-constexpr DWORD kDebounceMs = 80;
-
 constexpr WCHAR kPaletteProcess[] = L"Microsoft.CmdPal.UI.exe";
 constexpr WCHAR kShowEvent[] =
     L"Local\\PowerToysCmdPal-ShowEvent-62336fcd-8611-4023-9b30-091a6af4cc5a";
@@ -156,11 +149,6 @@ bool g_keyDown[256];
 
 bool g_winDown;
 bool g_chord;
-
-// When the last Win key went up, and whether the hook is swallowing a chatter
-// press until its key-up.
-DWORD g_winUpTime;
-bool g_winBounce;
 
 // The palette process, refreshed on the hook thread's message loop.
 DWORD g_palettePid;
@@ -516,22 +504,6 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
     g_keyDown[vk] = !up;
     bool isWin = vk == VK_LWIN || vk == VK_RWIN;
 
-    if (isWin) {
-        if (initialDown && !g_winDown &&
-            key->time - g_winUpTime < kDebounceMs) {
-            g_winBounce = true;
-        }
-        if (g_winBounce) {
-            if (up) {
-                g_winBounce = false;
-            }
-            return 1;
-        }
-        if (up && !g_keyDown[VK_LWIN] && !g_keyDown[VK_RWIN]) {
-            g_winUpTime = key->time;
-        }
-    }
-
     if (g_buffering && isWin && initialDown) {
         FlushAll();
     }
@@ -650,7 +622,6 @@ void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG, LONG,
         ReleaseAndStop();
         ZeroMemory(g_keyDown, sizeof(g_keyDown));
         g_winDown = false;
-        g_winBounce = false;
         return;
     }
 
