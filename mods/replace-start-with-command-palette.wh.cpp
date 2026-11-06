@@ -2,7 +2,7 @@
 // @id              replace-start-with-command-palette
 // @name            Replace Start with Command Palette
 // @description     Tap the Win key to open PowerToys Command Palette in place of the Start Menu
-// @version         1.0.1
+// @version         1.1.0
 // @author          HaydenReeve
 // @github          https://github.com/HaydenReeve
 // @include         windhawk-mod-uiaccess.exe
@@ -27,10 +27,12 @@ A tap still counts while you hold a key pressed before it, such as a
 push-to-talk key. Ctrl, Alt, and Shift are the exception, and releasing Win
 while one of them is held makes a chord.
 
-A Win press within 80 ms of a Win release is ignored, so a worn switch that
-bounces on release still counts as one tap.
-
 In the settings, you can pick a palette page to open or a command to run.
+
+For a keyboard whose Win switch bounces, turn on the bounce guard. A Win press
+that starts within 80 ms of a Win release then counts as part of the press
+before it, and a tap waits 80 ms after the release before it acts. Every Win press
+and release still reaches Windows, so Win shortcuts work as usual.
 
 Command Palette must be running for a tap to open it.
 
@@ -85,6 +87,14 @@ The mod does nothing while Sticky Keys is on.
   $options:
   - hook: Low-level hook
   - rawInput: Raw Input
+- bounceGuard: off
+  $name: Bounce guard
+  $description: >-
+    For a Win switch that bounces, a Win press within 80 ms of a Win release
+    counts as part of the press before it, and a tap waits 80 ms before it acts
+  $options:
+  - off: Off
+  - on: On
 */
 // ==/WindhawkModSettings==
 
@@ -119,9 +129,9 @@ constexpr UINT kSettleMs = 50;
 // How long Enter waits after the typed text, so the results can update.
 constexpr UINT kEnterDelayMs = 150;
 
-// How soon after a Win release the hook swallows a Win press as switch
-// chatter.
-constexpr DWORD kDebounceMs = 80;
+// With the bounce guard on, a Win press that starts this soon after a Win
+// release continues the press before it, and a tap's action waits this long.
+constexpr UINT kMergeMs = 80;
 
 constexpr WCHAR kPaletteProcess[] = L"Microsoft.CmdPal.UI.exe";
 constexpr WCHAR kShowEvent[] =
@@ -139,6 +149,7 @@ struct Settings {
     std::wstring command;
     std::wstring arguments;
     bool rawInput;
+    bool bounceGuard;
 } g_settings;
 
 DWORD g_threadId;
@@ -157,10 +168,16 @@ bool g_keyDown[256];
 bool g_winDown;
 bool g_chord;
 
-// When the last Win key went up, and whether the hook is swallowing a chatter
-// press until its key-up.
+// Whether the current Win press saw another key or a click, which keeps
+// Windows from opening Start at its release.
+bool g_pressHadInput;
+
+// The bounce guard's record of the last Win release, and the tap action
+// waiting out the merge window.
 DWORD g_winUpTime;
-bool g_winBounce;
+bool g_lastChord;
+UINT g_pendingAction;
+UINT_PTR g_actionTimer;
 
 // The palette process, refreshed on the hook thread's message loop.
 DWORD g_palettePid;
@@ -214,6 +231,7 @@ void LoadSettings() {
     g_settings.command = GetString(L"command");
     g_settings.arguments = GetString(L"arguments");
     g_settings.rawInput = GetString(L"mouseInput") == L"rawInput";
+    g_settings.bounceGuard = GetString(L"bounceGuard") == L"on";
 }
 
 // Keys that MapVirtualKey maps to their numpad scan codes unless flagged.
@@ -416,6 +434,30 @@ void HoldKey(const KBDLLHOOKSTRUCT* key) {
     g_buffer.push_back(input);
 }
 
+void PostPendingAction() {
+    StopTimer(g_actionTimer);
+    if (g_pendingAction) {
+        PostThreadMessageW(g_threadId, g_pendingAction, 0, 0);
+        g_pendingAction = 0;
+    }
+}
+
+void CancelPendingAction() {
+    StopTimer(g_actionTimer);
+    g_pendingAction = 0;
+}
+
+// With the bounce guard on, the action waits out the merge window, so a bounce
+// can cancel it.
+void PostAction(UINT message) {
+    if (!g_settings.bounceGuard) {
+        PostThreadMessageW(g_threadId, message, 0, 0);
+        return;
+    }
+    g_pendingAction = message;
+    StartTimer(g_actionTimer, kMergeMs);
+}
+
 // Runs inside the keyboard hook on a tap's Win key-up. Windows drops a
 // low-level hook that overruns its timeout, so slow work goes to the message
 // loop.
@@ -425,7 +467,7 @@ void OnTap() {
     // The close hotkey waits for the message loop, after the Win key-up, so a
     // hotkey without Win is not sent as Win plus that hotkey.
     if (!g_settings.runCommand && IsPaletteWindow(GetForegroundWindow())) {
-        PostThreadMessageW(g_threadId, kMsgClose, 0, 0);
+        PostAction(kMsgClose);
         return;
     }
 
@@ -435,7 +477,7 @@ void OnTap() {
         StartTimer(g_deadlineTimer, kFlushDeadlineMs);
     }
 
-    PostThreadMessageW(g_threadId, kMsgTap, 0, 0);
+    PostAction(kMsgTap);
 }
 
 // ShellExecute can block, so it runs on its own thread.
@@ -516,22 +558,6 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
     g_keyDown[vk] = !up;
     bool isWin = vk == VK_LWIN || vk == VK_RWIN;
 
-    if (isWin) {
-        if (initialDown && !g_winDown &&
-            key->time - g_winUpTime < kDebounceMs) {
-            g_winBounce = true;
-        }
-        if (g_winBounce) {
-            if (up) {
-                g_winBounce = false;
-            }
-            return 1;
-        }
-        if (up && !g_keyDown[VK_LWIN] && !g_keyDown[VK_RWIN]) {
-            g_winUpTime = key->time;
-        }
-    }
-
     if (g_buffering && isWin && initialDown) {
         FlushAll();
     }
@@ -553,19 +579,35 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
 
     if (isWin && initialDown && !g_winDown) {
         g_winDown = true;
-        g_chord = false;
+        g_pressHadInput = false;
+        // A bounce continues the press before it, so it cancels that press's
+        // tap and keeps its chord.
+        bool merge =
+            g_settings.bounceGuard && key->time - g_winUpTime < kMergeMs;
+        if (merge) {
+            CancelPendingAction();
+        }
+        g_chord = merge && g_lastChord;
     } else if (!isWin && initialDown && g_winDown) {
         g_chord = true;
+        g_pressHadInput = true;
     } else if (isWin && up && g_winDown && !g_keyDown[VK_LWIN] &&
                !g_keyDown[VK_RWIN]) {
         g_winDown = false;
-        if (!g_chord && !IsStickyKeysOn()) {
-            // A modifier still held at the Win release makes a chord, so a
-            // modifier rolled into the tap still counts as a tap.
-            if (IsModifierDown()) {
+        g_winUpTime = key->time;
+        g_lastChord = g_chord || IsModifierDown();
+        if (!IsStickyKeysOn()) {
+            if (!g_chord) {
+                // A modifier still held at the Win release makes a chord, so a
+                // modifier rolled into the tap still counts as a tap.
+                if (IsModifierDown()) {
+                    SendMaskKey();
+                } else {
+                    OnTap();
+                }
+            } else if (g_settings.bounceGuard && !g_pressHadInput) {
+                // Windows sees a bounce after a chord as a lone Win press.
                 SendMaskKey();
-            } else {
-                OnTap();
             }
         }
     }
@@ -581,6 +623,7 @@ void OnMouseButton(bool wheel) {
             SendMaskKey();
         }
         g_chord = true;
+        g_pressHadInput = true;
     }
     if (g_buffering && !wheel) {
         Flush();
@@ -650,7 +693,7 @@ void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG, LONG,
         ReleaseAndStop();
         ZeroMemory(g_keyDown, sizeof(g_keyDown));
         g_winDown = false;
-        g_winBounce = false;
+        CancelPendingAction();
         return;
     }
 
@@ -718,6 +761,8 @@ DWORD WINAPI HookThread(LPVOID readyEvent) {
                     FlushAll();
                 } else if (msg.wParam == g_settleTimer) {
                     Flush();
+                } else if (msg.wParam == g_actionTimer) {
+                    PostPendingAction();
                 }
                 break;
             default:

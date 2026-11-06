@@ -46,6 +46,7 @@ Each setting appears on the mod's Settings tab in Windhawk.
 | `command` | The program, file, folder, or URI a Win tap opens when `action` is `command`. | empty |
 | `arguments` | Arguments passed to the command. | empty |
 | `mouseInput` | How the mod sees mouse clicks: `hook` uses a low-level mouse hook, and `rawInput` uses Raw Input, which never delays the mouse. Only one mod in Windhawk's UI access process can use Raw Input. | `hook` |
+| `bounceGuard` | For a Win switch that bounces: `on` counts a Win press that starts within 80 ms of a Win release as part of the press before it, and a tap waits 80 ms before it acts. Every Win press and release still reaches Windows. | `off` |
 
 A hotkey's stored form is `[ctrl+][alt+][shift+][win+]<vk>`, where `<vk>` is the key's virtual-key code in decimal, so `32` is Space.
 
@@ -59,7 +60,7 @@ windhawk-cli mod settings set local@replace-start-with-command-palette <key>=<va
 
 The mod runs in Windhawk's UI access process, so it also works while an elevated window has focus.
 
-1. **Detect the tap.** A low-level keyboard hook keeps its own key-down table. A new key pressed while Win is down, or a mouse click, makes a chord. Repeats of a key held from before the Win press don't count, so a held push-to-talk key keeps the tap. Ctrl, Alt, or Shift still held at the Win release makes a chord. Left and right Win count alike. The hook treats a Win press within 80 ms of a Win release as switch chatter, and swallows it with its key-up.
+1. **Detect the tap.** A low-level keyboard hook keeps its own key-down table. A new key pressed while Win is down, or a mouse click, makes a chord. Repeats of a key held from before the Win press don't count, so a held push-to-talk key keeps the tap. Ctrl, Alt, or Shift still held at the Win release makes a chord. Left and right Win count alike.
 2. **Mask Start.** On a tap, or a click with Win held, the hook sends the unassigned key VK `0xE8` before Windows sees the Win release, so the Start Menu stays shut.
 3. **Summon.** The mod calls `AllowSetForegroundWindow` on the Command Palette process, then signals Command Palette's show event. With a page hotkey set, it sends that hotkey instead. With `action` set to `command`, it runs the command on its own thread. A tap while the palette is in front sends the palette hotkey, which closes it.
 4. **Buffer and replay.** Keys typed after the tap are held and replayed into the palette when its search box is ready. In the palette, an Enter and the keys after it wait briefly so the results update first. After a 600 ms deadline, every held key, Enter included, replays to whichever window has focus.
