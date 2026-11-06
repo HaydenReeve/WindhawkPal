@@ -27,6 +27,10 @@ void Reset() {
     ZeroMemory(g_keyDown, sizeof(g_keyDown));
     g_winDown = false;
     g_chord = false;
+    g_pressHadInput = false;
+    g_winUpTime = 0;
+    g_lastChord = false;
+    CancelPendingAction();
     g_palettePid = 0;
     fake::Reset();
     fake::settings.clear();
@@ -44,6 +48,21 @@ LRESULT Key(DWORD vk, bool up, DWORD scanCode = 0) {
 void Press(DWORD vk) {
     Key(vk, false);
     Key(vk, true);
+}
+
+// A key event at a hook timestamp in milliseconds, for the bounce guard.
+LRESULT KeyAt(DWORD time, DWORD vk, bool up) {
+    KBDLLHOOKSTRUCT key{};
+    key.vkCode = vk;
+    key.scanCode = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    key.flags = up ? LLKHF_UP : 0;
+    key.time = time;
+    return KeyboardProc(HC_ACTION, up ? WM_KEYUP : WM_KEYDOWN, (LPARAM)&key);
+}
+
+void GuardOn() {
+    fake::settings[L"bounceGuard"] = L"on";
+    LoadSettings();
 }
 
 int PostedCount(UINT message) {
@@ -120,6 +139,110 @@ void WinClickIsAChordThatMasksStartOnce() {
     Key(VK_LWIN, true);
     CHECK(!Tapped());
     CHECK(MasksSent() == 1);
+}
+
+// The bounce sequences below model a keyboard whose Win switch bounces. The
+// Win+V release bounce and the blip before a press replay logged timings.
+
+void GuardOffActsOnEachTapAtOnce() {
+    Reset();
+    KeyAt(1000, VK_LWIN, false);
+    KeyAt(1032, VK_LWIN, true);
+    KeyAt(1063, VK_LWIN, false);
+    KeyAt(1079, VK_LWIN, true);
+    CHECK(PostedCount(kMsgTap) == 2);
+}
+
+void GuardWaitsOutTheWindowBeforeActing() {
+    Reset();
+    GuardOn();
+    KeyAt(1000, VK_LWIN, false);
+    KeyAt(1100, VK_LWIN, true);
+    CHECK(MasksSent() == 1);
+    CHECK(!Tapped());
+    PostPendingAction();
+    CHECK(PostedCount(kMsgTap) == 1);
+}
+
+void GuardMergesABounceAfterATap() {
+    Reset();
+    GuardOn();
+    CHECK(KeyAt(1000, VK_LWIN, false) == 0);
+    CHECK(KeyAt(1032, VK_LWIN, true) == 0);
+    CHECK(KeyAt(1063, VK_LWIN, false) == 0);
+    CHECK(KeyAt(1079, VK_LWIN, true) == 0);
+    PostPendingAction();
+    CHECK(PostedCount(kMsgTap) == 1);
+    CHECK(MasksSent() == 2);
+}
+
+void GuardKeepsWinVWhenItsReleaseBounces() {
+    Reset();
+    GuardOn();
+    CHECK(KeyAt(5265, VK_LWIN, false) == 0);
+    CHECK(KeyAt(5296, 'V', false) == 0);
+    CHECK(KeyAt(5360, 'V', true) == 0);
+    CHECK(KeyAt(5375, VK_LWIN, true) == 0);
+    CHECK(KeyAt(5390, VK_LWIN, false) == 0);
+    CHECK(KeyAt(5421, VK_LWIN, true) == 0);
+    PostPendingAction();
+    CHECK(!Tapped());
+    CHECK(!g_buffering);
+    CHECK(MasksSent() == 1);
+}
+
+void GuardMergesABlipBeforeAPress() {
+    Reset();
+    GuardOn();
+    KeyAt(2662, VK_LWIN, false);
+    KeyAt(2685, VK_LWIN, true);
+    KeyAt(2762, VK_LWIN, false);
+    KeyAt(2820, VK_LWIN, true);
+    KeyAt(2841, VK_LWIN, false);
+    KeyAt(2864, VK_LWIN, true);
+    PostPendingAction();
+    CHECK(PostedCount(kMsgTap) == 1);
+}
+
+void GuardKeepsWinVStraightAfterATap() {
+    Reset();
+    GuardOn();
+    KeyAt(1000, VK_LWIN, false);
+    KeyAt(1080, VK_LWIN, true);
+    CHECK(KeyAt(1140, VK_LWIN, false) == 0);
+    CHECK(KeyAt(1170, 'V', false) == 0);
+    CHECK(KeyAt(1220, 'V', true) == 0);
+    CHECK(KeyAt(1300, VK_LWIN, true) == 0);
+    PostPendingAction();
+    CHECK(!Tapped());
+    CHECK(!g_buffering);
+}
+
+void GuardActsOnTwoTapsPastTheWindow() {
+    Reset();
+    GuardOn();
+    KeyAt(1000, VK_LWIN, false);
+    KeyAt(1100, VK_LWIN, true);
+    PostPendingAction();
+    KeyAt(1300, VK_LWIN, false);
+    KeyAt(1400, VK_LWIN, true);
+    PostPendingAction();
+    CHECK(PostedCount(kMsgTap) == 2);
+}
+
+void GuardBounceWhilePaletteInFrontClosesOnce() {
+    Reset();
+    GuardOn();
+    g_palettePid = kPalettePid;
+    fake::foreground = kPaletteWindow;
+    fake::foregroundPid = kPalettePid;
+    KeyAt(1000, VK_LWIN, false);
+    KeyAt(1032, VK_LWIN, true);
+    KeyAt(1063, VK_LWIN, false);
+    KeyAt(1079, VK_LWIN, true);
+    PostPendingAction();
+    CHECK(PostedCount(kMsgClose) == 1);
+    CHECK(!Tapped());
 }
 
 void StickyKeysTurnsTheModOff() {
@@ -209,6 +332,14 @@ int main() {
         TEST(CtrlRolledIntoWinIsATap),
         TEST(CtrlHeldThroughWinIsAChordThatMasksStart),
         TEST(WinClickIsAChordThatMasksStartOnce),
+        TEST(GuardOffActsOnEachTapAtOnce),
+        TEST(GuardWaitsOutTheWindowBeforeActing),
+        TEST(GuardMergesABounceAfterATap),
+        TEST(GuardKeepsWinVWhenItsReleaseBounces),
+        TEST(GuardMergesABlipBeforeAPress),
+        TEST(GuardKeepsWinVStraightAfterATap),
+        TEST(GuardActsOnTwoTapsPastTheWindow),
+        TEST(GuardBounceWhilePaletteInFrontClosesOnce),
         TEST(StickyKeysTurnsTheModOff),
         TEST(TapWithPaletteInFrontCloses),
         TEST(TypedKeysWaitForThePalette),

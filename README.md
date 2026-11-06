@@ -46,6 +46,7 @@ Each setting appears on the mod's Settings tab in Windhawk.
 | `command` | The program, file, folder, or URI a Win tap opens when `action` is `command`. | empty |
 | `arguments` | Arguments passed to the command. | empty |
 | `mouseInput` | How the mod sees mouse clicks: `hook` uses a low-level mouse hook, and `rawInput` uses Raw Input, which never delays the mouse. Only one mod in Windhawk's UI access process can use Raw Input. | `hook` |
+| `bounceGuard` | For a Win switch that bounces: `on` counts a Win press that starts within 80 ms of a Win release as part of the press before it, and a tap waits 80 ms before it acts. Every Win press and release still reaches Windows. | `off` |
 
 A hotkey's stored form is `[ctrl+][alt+][shift+][win+]<vk>`, where `<vk>` is the key's virtual-key code in decimal, so `32` is Space.
 
