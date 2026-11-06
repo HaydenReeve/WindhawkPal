@@ -22,11 +22,18 @@ int g_failures;
 constexpr DWORD kPalettePid = 1234;
 const HWND kPaletteWindow = (HWND)0x1;
 
+// The event clock, which steps 200 ms per key event so presses stay clear of
+// the debounce window.
+DWORD g_time;
+
 void Reset() {
     StopBuffering();
     ZeroMemory(g_keyDown, sizeof(g_keyDown));
     g_winDown = false;
     g_chord = false;
+    g_winUpTime = 0;
+    g_winBounce = false;
+    g_time = 1000;
     g_palettePid = 0;
     fake::Reset();
     fake::settings.clear();
@@ -38,6 +45,7 @@ LRESULT Key(DWORD vk, bool up, DWORD scanCode = 0) {
     key.vkCode = vk;
     key.scanCode = scanCode ? scanCode : MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
     key.flags = up ? LLKHF_UP : 0;
+    key.time = g_time += 200;
     return KeyboardProc(HC_ACTION, up ? WM_KEYUP : WM_KEYDOWN, (LPARAM)&key);
 }
 
@@ -120,6 +128,27 @@ void WinClickIsAChordThatMasksStartOnce() {
     Key(VK_LWIN, true);
     CHECK(!Tapped());
     CHECK(MasksSent() == 1);
+}
+
+void ChatterAfterATapIsSwallowed() {
+    Reset();
+    Press(VK_LWIN);
+    fake::Reset();
+    g_time -= 160;  // The next press comes 40 ms after the release.
+    CHECK(Key(VK_LWIN, false) == 1);
+    CHECK(Key(VK_LWIN, true) == 1);
+    CHECK(!Tapped());
+    CHECK(MasksSent() == 0);
+    Press(VK_LWIN);
+    CHECK(Tapped());
+}
+
+void SecondTapPastTheDebounceCounts() {
+    Reset();
+    Press(VK_LWIN);
+    Press(VK_LWIN);
+    CHECK(PostedCount(kMsgTap) == 2);
+    CHECK(MasksSent() == 2);
 }
 
 void StickyKeysTurnsTheModOff() {
@@ -209,6 +238,8 @@ int main() {
         TEST(CtrlRolledIntoWinIsATap),
         TEST(CtrlHeldThroughWinIsAChordThatMasksStart),
         TEST(WinClickIsAChordThatMasksStartOnce),
+        TEST(ChatterAfterATapIsSwallowed),
+        TEST(SecondTapPastTheDebounceCounts),
         TEST(StickyKeysTurnsTheModOff),
         TEST(TapWithPaletteInFrontCloses),
         TEST(TypedKeysWaitForThePalette),
